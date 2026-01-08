@@ -9,11 +9,10 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 import sqlite3
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
 import time
 
 # Настройка логирования
@@ -28,6 +27,9 @@ API_TOKEN = '7330339638:AAGTMJmANqau4-7ucGW8wTa_rPMb_f5uVF8'
 if not API_TOKEN:
     logger.error("TELEGRAM_BOT_TOKEN не установлен!")
     raise ValueError("TELEGRAM_BOT_TOKEN не установлен!")
+
+# Список администраторов
+ADMIN_IDS = [5618005272, 1179013374]
 
 bot = telebot.TeleBot(API_TOKEN)
 
@@ -44,6 +46,10 @@ TITLE, X_LABEL, Y_LABEL, SHOW_VALUES = range(4)
 ADMIN_MENU, ADMIN_BROADCAST, ADMIN_BROADCAST_CONFIRM, ADMIN_USER_MESSAGE = range(4, 8)
 user_data = {}
 admin_states = {}  # Отдельный словарь для состояний админов
+
+def is_admin(user_id: int) -> bool:
+    """Проверка, является ли пользователь администратором"""
+    return user_id in ADMIN_IDS
 
 class DatabaseManager:
     """Менеджер для работы с базой данных"""
@@ -454,11 +460,8 @@ def show_stats(message):
 @bot.message_handler(commands=['admin_stats'])
 def admin_stats(message):
     """Показать общую статистику (для администраторов)"""
-    # ID администраторов из переменной окружения
-    admin_ids = ['5618005272', '1179013374'] 
-    admin_ids = [int(id.strip()) for id in admin_ids if id.strip().isdigit()]
-    
-    if message.from_user.id not in admin_ids:
+    # Используем единую функцию проверки
+    if not is_admin(message.from_user.id):
         bot.send_message(message.chat.id, "⛔ У вас нет прав для просмотра этой статистики")
         return
     
@@ -761,12 +764,6 @@ def cleanup_old_data():
         logger.info(f"Очищено {deleted} старых записей")
     except Exception as e:
         logger.error(f"Ошибка очистки старых данных: {e}")
-
-def is_admin(user_id: int) -> bool:
-    """Проверка, является ли пользователь администратором"""
-    admin_ids_str = ['5618005272', '1179013374'] 
-    admin_ids = [int(id.strip()) for id in admin_ids_str.split(',') if id.strip().isdigit()]
-    return user_id in admin_ids
 
 @bot.message_handler(commands=['admin'])
 def admin_menu(message):
