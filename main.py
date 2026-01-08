@@ -719,50 +719,6 @@ def create_heatmap(chat_id):
         if chat_id in user_data:
             del user_data[chat_id]
 
-@bot.message_handler(func=lambda message: True)
-def handle_other_messages(message):
-    """Обработка всех остальных сообщений"""
-    # Проверяем, не находится ли пользователь в админ-состоянии
-    if message.chat.id in admin_states:
-        state = admin_states[message.chat.id].get('state')
-        
-        if state == ADMIN_BROADCAST:
-            # Ждем сообщение для рассылки
-            handle_broadcast_message(message)
-        elif state == ADMIN_BROADCAST_CONFIRM:
-            # Ждем подтверждения рассылки
-            handle_broadcast_confirmation(message)
-        elif state == ADMIN_USER_MESSAGE:
-            # Ждем ввод данных для отправки пользователю
-            handle_user_message_input(message)
-        else:
-            bot.send_message(message.chat.id, "Пожалуйста, используйте меню администратора или /cancel для отмены")
-    
-    # Проверяем, не находится ли пользователь в обычном состоянии
-    elif message.chat.id in user_data:
-        state = user_data[message.chat.id].get('state')
-        if state == SHOW_VALUES:
-            bot.send_message(message.chat.id, "Пожалуйста, ответьте 'Да' или 'Нет'")
-        else:
-            bot.send_message(message.chat.id, "Пожалуйста, завершите текущий ввод или начните заново с /start")
-    
-    else:
-        # Если не в процессе, предлагаем начать
-        if is_admin(message.from_user.id):
-            bot.send_message(message.chat.id, "Используйте /start для работы с ботом или /admin для админ-панели")
-        else:
-            bot.send_message(message.chat.id, "Используйте /start чтобы начать работу с ботом")
-    
-    db_manager.log_session(message.from_user.id, 'other_message')
-
-def cleanup_old_data():
-    """Очистка старых данных (запускается при старте)"""
-    try:
-        deleted = db_manager.cleanup_old_sessions(days=30)
-        logger.info(f"Очищено {deleted} старых записей")
-    except Exception as e:
-        logger.error(f"Ошибка очистки старых данных: {e}")
-
 @bot.message_handler(commands=['admin'])
 def admin_menu(message):
     """Меню администратора"""
@@ -1153,6 +1109,50 @@ def cancel_command(message):
     
     else:
         bot.send_message(message.chat.id, "Нет активных операций для отмены")
+
+@bot.message_handler(func=lambda message: True)
+def handle_other_messages(message):
+    """Обработка всех остальных сообщений"""
+    # Проверяем, не находится ли пользователь в админ-состоянии
+    if message.chat.id in admin_states:
+        state = admin_states[message.chat.id].get('state')
+        
+        if state == ADMIN_BROADCAST:
+            # Ждем сообщение для рассылки
+            handle_broadcast_message(message)
+        elif state == ADMIN_BROADCAST_CONFIRM:
+            # Ждем подтверждения рассылки
+            handle_broadcast_confirmation(message)
+        elif state == ADMIN_USER_MESSAGE:
+            # Ждем ввод данных для отправки пользователю
+            handle_user_message_input(message)
+        else:
+            bot.send_message(message.chat.id, "Пожалуйста, используйте меню администратора или /cancel для отмены")
+    
+    # Проверяем, не находится ли пользователь в обычном состоянии
+    elif message.chat.id in user_data:
+        state = user_data[message.chat.id].get('state')
+        if state == SHOW_VALUES:
+            bot.send_message(message.chat.id, "Пожалуйста, ответьте 'Да' или 'Нет'")
+        else:
+            bot.send_message(message.chat.id, "Пожалуйста, завершите текущий ввод или начните заново с /start")
+    
+    else:
+        # Если не в процессе, предлагаем начать
+        if is_admin(message.from_user.id):
+            bot.send_message(message.chat.id, "Используйте /start для работы с ботом или /admin для админ-панели")
+        else:
+            bot.send_message(message.chat.id, "Используйте /start чтобы начать работу с ботом")
+    
+    db_manager.log_session(message.from_user.id, 'other_message')
+
+def cleanup_old_data():
+    """Очистка старых данных (запускается при старте)"""
+    try:
+        deleted = db_manager.cleanup_old_sessions(days=30)
+        logger.info(f"Очищено {deleted} старых записей")
+    except Exception as e:
+        logger.error(f"Ошибка очистки старых данных: {e}")
 
 if __name__ == "__main__":
     logger.info("Запуск бота...")
