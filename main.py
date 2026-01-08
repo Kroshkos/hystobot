@@ -4,7 +4,7 @@ import telebot
 import pandas as pd
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')  # Для работы без GUI
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from io import BytesIO
 import sqlite3
@@ -14,6 +14,7 @@ import os
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
+import time
 
 # Настройка логирования
 logging.basicConfig(
@@ -39,9 +40,10 @@ LOG_PATH = os.path.join(DATA_DIR, 'bot.log')
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Глобальные переменные
-data = None
 TITLE, X_LABEL, Y_LABEL, SHOW_VALUES = range(4)
+ADMIN_MENU, ADMIN_BROADCAST, ADMIN_BROADCAST_CONFIRM, ADMIN_USER_MESSAGE = range(4, 8)
 user_data = {}
+admin_states = {}  # Отдельный словарь для состояний админов
 
 class DatabaseManager:
     """Менеджер для работы с базой данных"""
@@ -350,6 +352,23 @@ def help_command(message):
     help_text = """
 🆘 *Помощь по использованию бота*
 
+*Основные команды:*
+/start - Начать работу с ботом
+/help - Показать эту справку
+/stats - Ваша статистика
+/cancel - Отменить текущую операцию
+"""
+    
+    # Добавляем админ-команды для администраторов
+    if is_admin(message.from_user.id):
+        help_text += """
+*Команды администратора:*
+/admin - Панель администратора
+/admin_stats - Общая статистика бота
+"""
+    
+    help_text += """
+*Как создать тепловую карту:*
 1. Подготовьте Excel-файл:
    - Первый столбец: названия строк
    - Остальные столбцы: числовые данные
@@ -370,10 +389,8 @@ def help_command(message):
 - Максимальные размеры данных: 20x20
 - Поддерживаемые форматы: .xlsx
 
-🔄 Если что-то пошло не так, просто начните заново с команды /start
-
-📊 Для просмотра вашей статистики используйте /stats
-    """
+🔄 Если что-то пошло не так, используйте /cancel
+"""
     
     bot.send_message(message.chat.id, help_text, parse_mode='Markdown')
     db_manager.log_session(message.from_user.id, 'help_requested')
@@ -701,18 +718,39 @@ def create_heatmap(chat_id):
             del user_data[chat_id]
 
 @bot.message_handler(func=lambda message: True)
+@bot.message_handler(func=lambda message: True)
 def handle_other_messages(message):
     """Обработка всех остальных сообщений"""
-    if message.chat.id in user_data:
-        # Если пользователь в процессе ввода, просим завершить его
+    # Проверяем, не находится ли пользователь в админ-состоянии
+    if message.chat.id in admin_states:
+        state = admin_states[message.chat.id].get('state')
+        
+        if state == ADMIN_BROADCAST:
+            # Ждем сообщение для рассылки
+            handle_broadcast_message(message)
+        elif state == ADMIN_BROADCAST_CONFIRM:
+            # Ждем подтверждения рассылки
+            handle_broadcast_confirmation(message)
+        elif state == ADMIN_USER_MESSAGE:
+            # Ждем ввод данных для отправки пользователю
+            handle_user_message_input(message)
+        else:
+            bot.send_message(message.chat.id, "Пожалуйста, используйте меню администратора или /cancel для отмены")
+    
+    # Проверяем, не находится ли пользователь в обычном состоянии
+    elif message.chat.id in user_data:
         state = user_data[message.chat.id].get('state')
         if state == SHOW_VALUES:
             bot.send_message(message.chat.id, "Пожалуйста, ответьте 'Да' или 'Нет'")
         else:
             bot.send_message(message.chat.id, "Пожалуйста, завершите текущий ввод или начните заново с /start")
+    
     else:
         # Если не в процессе, предлагаем начать
-        bot.send_message(message.chat.id, "Используйте /start чтобы начать работу с ботом")
+        if is_admin(message.from_user.id):
+            bot.send_message(message.chat.id, "Используйте /start для работы с ботом")
+        else:
+            bot.send_message(message.chat.id, "Используйте /start чтобы начать работу с ботом")
     
     db_manager.log_session(message.from_user.id, 'other_message')
 
@@ -723,6 +761,403 @@ def cleanup_old_data():
         logger.info(f"Очищено {deleted} старых записей")
     except Exception as e:
         logger.error(f"Ошибка очистки старых данных: {e}")
+
+def is_admin(user_id: int) -> bool:
+    """Проверка, является ли пользователь администратором"""
+    admin_ids_str = os.getenv('ADMIN_IDS', '')
+    admin_ids = [int(id.strip()) for id in admin_ids_str.split(',') if id.strip().isdigit()]
+    return user_id in admin_ids
+
+@bot.message_handler(commands=['admin'])
+def admin_menu(message):
+    """Меню администратора"""
+    if not is_admin(message.from_user.id):
+        bot.send_message(message.chat.id, "⛔ У вас нет прав доступа к админ-панели")
+        return
+    
+    admin_states[message.chat.id] = {'state': ADMIN_MENU}
+    
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add('📢 Рассылка всем', '📨 Отправить пользователю')
+    markup.add('📊 Статистика', '📋 Список пользователей')
+    markup.add('🚫 Закрыть меню')
+    
+    bot.send_message(
+        message.chat.id,
+        "⚙️ *Панель администратора*\n\n"
+        "Выберите действие:",
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+    
+    db_manager.log_session(message.from_user.id, 'admin_menu_opened')
+
+@bot.message_handler(func=lambda message: admin_states.get(message.chat.id, {}).get('state') == ADMIN_MENU)
+def handle_admin_menu(message):
+    """Обработка выбора в меню администратора"""
+    if message.text == '📢 Рассылка всем':
+        admin_states[message.chat.id] = {'state': ADMIN_BROADCAST}
+        markup = telebot.types.ReplyKeyboardRemove()
+        bot.send_message(
+            message.chat.id,
+            "📝 *Создание рассылки*\n\n"
+            "Введите сообщение для рассылки всем пользователям.\n"
+            "Вы можете использовать Markdown разметку.\n\n"
+            "Для отмены отправьте /cancel",
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
+    
+    elif message.text == '📨 Отправить пользователю':
+        admin_states[message.chat.id] = {'state': ADMIN_USER_MESSAGE}
+        markup = telebot.types.ReplyKeyboardRemove()
+        bot.send_message(
+            message.chat.id,
+            "👤 *Отправка сообщения пользователю*\n\n"
+            "Введите ID пользователя и сообщение в формате:\n"
+            "`ID_пользователя Текст сообщения`\n\n"
+            "Пример:\n"
+            "`123456789 Привет! Как дела?`\n\n"
+            "Для отмены отправьте /cancel",
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
+    
+    elif message.text == '📊 Статистика':
+        admin_stats(message)
+    
+    elif message.text == '📋 Список пользователей':
+        show_users_list(message)
+    
+    elif message.text == '🚫 Закрыть меню':
+        markup = telebot.types.ReplyKeyboardRemove()
+        bot.send_message(message.chat.id, "Меню закрыто", reply_markup=markup)
+        if message.chat.id in admin_states:
+            del admin_states[message.chat.id]
+    
+    else:
+        bot.send_message(message.chat.id, "Пожалуйста, выберите действие из меню")
+
+@bot.message_handler(func=lambda message: admin_states.get(message.chat.id, {}).get('state') == ADMIN_BROADCAST)
+def handle_broadcast_message(message):
+    """Обработка сообщения для рассылки"""
+    if message.text == '/cancel':
+        markup = telebot.types.ReplyKeyboardRemove()
+        bot.send_message(message.chat.id, "❌ Рассылка отменена", reply_markup=markup)
+        del admin_states[message.chat.id]
+        return
+    
+    admin_states[message.chat.id]['message'] = message.text
+    admin_states[message.chat.id]['state'] = ADMIN_BROADCAST_CONFIRM
+    
+    # Подсчет пользователей
+    user_count = count_total_users()
+    
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add('✅ Да, отправить', '❌ Нет, отменить')
+    
+    preview = message.text[:500] + "..." if len(message.text) > 500 else message.text
+    
+    bot.send_message(
+        message.chat.id,
+        f"📨 *Предпросмотр сообщения:*\n\n{preview}\n\n"
+        f"📊 Будет отправлено: *{user_count}* пользователям\n\n"
+        f"Подтверждаете отправку?",
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+
+@bot.message_handler(func=lambda message: admin_states.get(message.chat.id, {}).get('state') == ADMIN_BROADCAST_CONFIRM)
+def handle_broadcast_confirmation(message):
+    """Подтверждение рассылки"""
+    if message.text == '✅ Да, отправить':
+        bot.send_message(message.chat.id, "🔄 Начинаю рассылку...")
+        
+        broadcast_message = admin_states[message.chat.id]['message']
+        results = send_broadcast(message.chat.id, broadcast_message)
+        
+        markup = telebot.types.ReplyKeyboardRemove()
+        bot.send_message(
+            message.chat.id,
+            f"✅ Рассылка завершена!\n\n"
+            f"📊 Результаты:\n"
+            f"• Успешно: {results['success']}\n"
+            f"• Неудачно: {results['failed']}\n"
+            f"• Всего: {results['total']}",
+            reply_markup=markup
+        )
+        
+        # Логирование
+        db_manager.log_session(
+            message.from_user.id,
+            'broadcast_sent',
+            parameters={
+                'message_length': len(broadcast_message),
+                'success': results['success'],
+                'failed': results['failed'],
+                'total': results['total']
+            },
+            success=True
+        )
+        
+        del admin_states[message.chat.id]
+    
+    elif message.text == '❌ Нет, отменить':
+        markup = telebot.types.ReplyKeyboardRemove()
+        bot.send_message(message.chat.id, "❌ Рассылка отменена", reply_markup=markup)
+        del admin_states[message.chat.id]
+    
+    else:
+        bot.send_message(message.chat.id, "Пожалуйста, выберите '✅ Да, отправить' или '❌ Нет, отменить'")
+
+@bot.message_handler(func=lambda message: admin_states.get(message.chat.id, {}).get('state') == ADMIN_USER_MESSAGE)
+def handle_user_message_input(message):
+    """Обработка отправки сообщения конкретному пользователю"""
+    if message.text == '/cancel':
+        markup = telebot.types.ReplyKeyboardRemove()
+        bot.send_message(message.chat.id, "❌ Отправка отменена", reply_markup=markup)
+        del admin_states[message.chat.id]
+        return
+    
+    try:
+        # Парсим ввод: первое число - ID, остальное - сообщение
+        parts = message.text.split(' ', 1)
+        if len(parts) < 2:
+            raise ValueError("Неправильный формат")
+        
+        user_id = int(parts[0])
+        user_message = parts[1]
+        
+        # Проверяем, существует ли пользователь
+        user_info = db_manager.get_user_stats(user_id)
+        if not user_info:
+            bot.send_message(message.chat.id, f"❌ Пользователь с ID {user_id} не найден в базе")
+            return
+        
+        # Подтверждение
+        admin_states[message.chat.id]['target_user_id'] = user_id
+        admin_states[message.chat.id]['user_message'] = user_message
+        
+        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        markup.add('✅ Отправить', '❌ Отменить')
+        
+        user_name = user_info.get('username', f"Пользователь {user_id}")
+        preview = user_message[:300] + "..." if len(user_message) > 300 else user_message
+        
+        bot.send_message(
+            message.chat.id,
+            f"👤 *Отправка пользователю:* {user_name}\n"
+            f"🆔 ID: {user_id}\n\n"
+            f"📝 *Сообщение:*\n{preview}\n\n"
+            f"Подтвердите отправку:",
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
+        
+    except ValueError as e:
+        bot.send_message(
+            message.chat.id,
+            "❌ Неправильный формат. Используйте:\n"
+            "`ID_пользователя Текст сообщения`\n\n"
+            "Пример:\n"
+            "`123456789 Привет! Проверяю работу бота.`",
+            parse_mode='Markdown'
+        )
+
+@bot.message_handler(func=lambda message: admin_states.get(message.chat.id, {}).get('state') == ADMIN_USER_MESSAGE and 
+                    message.text in ['✅ Отправить', '❌ Отменить'])
+def handle_user_message_confirmation(message):
+    """Подтверждение отправки сообщения пользователю"""
+    if message.text == '✅ Отправить':
+        user_id = admin_states[message.chat.id]['target_user_id']
+        user_message = admin_states[message.chat.id]['user_message']
+        
+        try:
+            # Пытаемся отправить сообщение
+            bot.send_message(user_id, user_message)
+            
+            markup = telebot.types.ReplyKeyboardRemove()
+            bot.send_message(
+                message.chat.id,
+                f"✅ Сообщение успешно отправлено пользователю {user_id}",
+                reply_markup=markup
+            )
+            
+            # Логирование
+            db_manager.log_session(
+                message.from_user.id,
+                'user_message_sent',
+                parameters={'target_user_id': user_id, 'message_length': len(user_message)},
+                success=True
+            )
+            
+        except Exception as e:
+            error_msg = str(e)
+            bot.send_message(
+                message.chat.id,
+                f"❌ Не удалось отправить сообщение пользователю {user_id}\n"
+                f"Ошибка: {error_msg}"
+            )
+            
+            db_manager.log_session(
+                message.from_user.id,
+                'user_message_failed',
+                parameters={'target_user_id': user_id, 'error': error_msg},
+                success=False
+            )
+    
+    elif message.text == '❌ Отменить':
+        markup = telebot.types.ReplyKeyboardRemove()
+        bot.send_message(message.chat.id, "❌ Отправка отменена", reply_markup=markup)
+    
+    del admin_states[message.chat.id]
+
+def count_total_users() -> int:
+    """Подсчет общего количества пользователей"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM users')
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+    except Exception as e:
+        logger.error(f"Ошибка подсчета пользователей: {e}")
+        return 0
+
+def send_broadcast(admin_chat_id: int, message_text: str) -> dict:
+    """Отправка рассылки всем пользователям"""
+    results = {
+        'success': 0,
+        'failed': 0,
+        'total': 0
+    }
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id FROM users')
+        users = cursor.fetchall()
+        conn.close()
+        
+        results['total'] = len(users)
+        
+        bot.send_message(admin_chat_id, f"🔄 Отправка {len(users)} сообщений...")
+        
+        # Ограничиваем частоту отправки, чтобы не превысить лимиты Telegram
+        for i, (user_id,) in enumerate(users):
+            try:
+                bot.send_message(user_id, message_text)
+                results['success'] += 1
+                
+                # Отправляем статус каждые 10 сообщений
+                if (i + 1) % 10 == 0:
+                    bot.send_message(
+                        admin_chat_id,
+                        f"📊 Прогресс: {i + 1}/{len(users)} "
+                        f"({((i + 1) / len(users) * 100):.1f}%)"
+                    )
+                
+                # Пауза между сообщениями, чтобы не попасть в лимиты
+                time.sleep(0.1)
+                
+            except Exception as e:
+                results['failed'] += 1
+                logger.error(f"Ошибка отправки пользователю {user_id}: {e}")
+                
+                # Если ошибка "Chat not found" или "bot was blocked", можно пропустить
+                error_msg = str(e)
+                if "chat not found" in error_msg.lower() or "bot was blocked" in error_msg.lower():
+                    logger.info(f"Пользователь {user_id} заблокировал бота или чат не найден")
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"Ошибка при рассылке: {e}")
+        return results
+
+def show_users_list(message):
+    """Показать список пользователей"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем последних 20 пользователей
+        cursor.execute('''
+            SELECT user_id, username, first_name, last_active, total_requests 
+            FROM users 
+            ORDER BY last_active DESC 
+            LIMIT 20
+        ''')
+        
+        users = cursor.fetchall()
+        conn.close()
+        
+        if not users:
+            bot.send_message(message.chat.id, "📭 В базе нет пользователей")
+            return
+        
+        response = "📋 *Последние 20 пользователей:*\n\n"
+        
+        for i, user in enumerate(users, 1):
+            user_id, username, first_name, last_active, total_requests = user
+            
+            # Форматируем имя
+            if username:
+                name = f"@{username}"
+            elif first_name:
+                name = first_name
+            else:
+                name = f"ID: {user_id}"
+            
+            # Форматируем дату
+            if isinstance(last_active, str):
+                last_seen = last_active[:16]
+            else:
+                last_seen = last_active.strftime('%Y-%m-%d %H:%M')
+            
+            response += f"{i}. {name}\n"
+            response += f"   🆔: {user_id}\n"
+            response += f"   📅: {last_seen}\n"
+            response += f"   📊: {total_requests} запросов\n\n"
+        
+        # Добавляем общую статистику
+        total_users = count_total_users()
+        response += f"📈 Всего пользователей в базе: {total_users}"
+        
+        # Если сообщение слишком длинное, разбиваем на части
+        if len(response) > 4000:
+            parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
+            for part in parts:
+                bot.send_message(message.chat.id, part, parse_mode='Markdown')
+        else:
+            bot.send_message(message.chat.id, response, parse_mode='Markdown')
+        
+        db_manager.log_session(message.from_user.id, 'users_list_viewed')
+        
+    except Exception as e:
+        logger.error(f"Ошибка получения списка пользователей: {e}")
+        bot.send_message(message.chat.id, f"❌ Ошибка при получении списка: {str(e)}")
+
+@bot.message_handler(commands=['cancel'])
+def cancel_command(message):
+    """Отмена текущей операции"""
+    if message.chat.id in admin_states:
+        state = admin_states[message.chat.id].get('state')
+        if state in [ADMIN_BROADCAST, ADMIN_BROADCAST_CONFIRM, ADMIN_USER_MESSAGE]:
+            markup = telebot.types.ReplyKeyboardRemove()
+            bot.send_message(message.chat.id, "❌ Операция отменена", reply_markup=markup)
+            del admin_states[message.chat.id]
+    
+    elif message.chat.id in user_data:
+        state = user_data[message.chat.id].get('state')
+        if state in [TITLE, X_LABEL, Y_LABEL, SHOW_VALUES]:
+            markup = telebot.types.ReplyKeyboardRemove()
+            bot.send_message(message.chat.id, "❌ Создание тепловой карты отменено", reply_markup=markup)
+            del user_data[message.chat.id]
+    
+    else:
+        bot.send_message(message.chat.id, "Нет активных операций для отмены")
 
 if __name__ == "__main__":
     logger.info("Запуск бота...")
