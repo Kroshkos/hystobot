@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Конфигурация
-API_TOKEN = os.getenv('7330339638:AAGTMJmANqau4-7ucGW8wTa_rPMb_f5uVF8')
+API_TOKEN = '7330339638:AAGTMJmANqau4-7ucGW8wTa_rPMb_f5uVF8'
 if not API_TOKEN:
     logger.error("TELEGRAM_BOT_TOKEN не установлен!")
     raise ValueError("TELEGRAM_BOT_TOKEN не установлен!")
