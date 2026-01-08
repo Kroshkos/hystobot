@@ -402,7 +402,6 @@ def help_command(message):
     db_manager.log_session(message.from_user.id, 'help_requested')
 
 @bot.message_handler(commands=['stats'])
-@bot.message_handler(commands=['stats'])
 def show_stats(message):
     """Показать статистику пользователя"""
     db_manager.update_user_info(message)
@@ -723,11 +722,6 @@ def create_heatmap(chat_id):
 @bot.message_handler(func=lambda message: True)
 def handle_other_messages(message):
     """Обработка всех остальных сообщений"""
-    # Проверяем, является ли сообщение командой
-    if message.text and message.text.startswith('/'):
-        # Это команда, пусть её обработают другие обработчики
-        return
-    
     # Проверяем, не находится ли пользователь в админ-состоянии
     if message.chat.id in admin_states:
         state = admin_states[message.chat.id].get('state')
