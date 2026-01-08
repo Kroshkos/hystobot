@@ -13,6 +13,7 @@ from datetime import datetime
 import os
 import logging
 from typing import Optional, Dict, Any
+from datetime import datetime, timedelta
 
 # Настройка логирования
 logging.basicConfig(
@@ -143,8 +144,8 @@ class DatabaseManager:
             logger.error(f"Ошибка обновления пользователя: {e}")
     
     def log_session(self, user_id: int, action_type: str, file_name: Optional[str] = None,
-                   parameters: Optional[Dict[str, Any]] = None, success: bool = True,
-                   error_message: Optional[str] = None) -> None:
+               parameters: Optional[Dict[str, Any]] = None, success: bool = True,
+               error_message: Optional[str] = None) -> None:
         """Логирование сессии"""
         try:
             conn = self.get_connection()
@@ -155,8 +156,8 @@ class DatabaseManager:
             (user_id, action_type, file_name, parameters, success, error_message)
             VALUES (?, ?, ?, ?, ?, ?)
             ''', (user_id, action_type, file_name, 
-                  json.dumps(parameters, ensure_ascii=False) if parameters else None,
-                  success, error_message))
+                json.dumps(parameters, ensure_ascii=False) if parameters else None,
+                success, error_message))
             
             # Если это успешное создание тепловой карты, увеличиваем счетчик
             if action_type == 'heatmap_created' and success:
@@ -167,15 +168,58 @@ class DatabaseManager:
             
             # Обновляем ежедневную статистику
             today = datetime.now().date()
-            cursor.execute('''
-            INSERT OR REPLACE INTO daily_stats (date, active_users, total_requests, 
-                                               successful_heatmaps, failed_requests)
-            VALUES (?, 
-                    (SELECT COUNT(DISTINCT user_id) FROM users WHERE DATE(last_active) = ?),
-                    COALESCE((SELECT total_requests FROM daily_stats WHERE date = ?), 0) + 1,
-                    COALESCE((SELECT successful_heatmaps FROM daily_stats WHERE date = ?), 0) + (1 if ? = 'heatmap_created' AND ? else 0),
-                    COALESCE((SELECT failed_requests FROM daily_stats WHERE date = ?), 0) + (0 if ? else 1))
-            ''', (today, today, today, today, action_type, success, today, success))
+            
+            # Сначала получаем текущие значения
+            cursor.execute('SELECT * FROM daily_stats WHERE date = ?', (today,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Обновляем существующую запись
+                active_users = existing['active_users']
+                total_requests = existing['total_requests'] + 1
+                successful_heatmaps = existing['successful_heatmaps']
+                failed_requests = existing['failed_requests']
+                
+                # Проверяем, нужно ли обновить active_users
+                cursor.execute('''
+                SELECT COUNT(DISTINCT user_id) as count 
+                FROM users 
+                WHERE DATE(last_active) = ?
+                ''', (today,))
+                active_users_count = cursor.fetchone()['count']
+                
+                # Обновляем значения в зависимости от типа действия
+                if action_type == 'heatmap_created' and success:
+                    successful_heatmaps += 1
+                elif not success:
+                    failed_requests += 1
+                
+                cursor.execute('''
+                UPDATE daily_stats 
+                SET active_users = ?,
+                    total_requests = ?,
+                    successful_heatmaps = ?,
+                    failed_requests = ?
+                WHERE date = ?
+                ''', (active_users_count, total_requests, successful_heatmaps, failed_requests, today))
+            else:
+                # Создаем новую запись
+                # Считаем активных пользователей за сегодня
+                cursor.execute('''
+                SELECT COUNT(DISTINCT user_id) as count 
+                FROM users 
+                WHERE DATE(last_active) = ?
+                ''', (today,))
+                active_users_count = cursor.fetchone()['count']
+                
+                successful_heatmaps = 1 if action_type == 'heatmap_created' and success else 0
+                failed_requests = 0 if success else 1
+                
+                cursor.execute('''
+                INSERT INTO daily_stats 
+                (date, active_users, total_requests, successful_heatmaps, failed_requests)
+                VALUES (?, ?, 1, ?, ?)
+                ''', (today, active_users_count, successful_heatmaps, failed_requests))
             
             conn.commit()
             conn.close()
@@ -335,6 +379,7 @@ def help_command(message):
     db_manager.log_session(message.from_user.id, 'help_requested')
 
 @bot.message_handler(commands=['stats'])
+@bot.message_handler(commands=['stats'])
 def show_stats(message):
     """Показать статистику пользователя"""
     db_manager.update_user_info(message)
@@ -345,17 +390,42 @@ def show_stats(message):
         user = message.from_user
         username = f"@{user.username}" if user.username else user.first_name
         
+        # Форматируем даты
+        first_seen = stats['first_seen']
+        if isinstance(first_seen, str):
+            first_seen_str = first_seen
+        else:
+            first_seen_str = first_seen.strftime('%Y-%m-%d %H:%M:%S')
+        
+        last_active = stats['last_active']
+        if isinstance(last_active, str):
+            last_active_str = last_active
+        else:
+            last_active_str = last_active.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Вычисляем среднее количество запросов в день
+        try:
+            if isinstance(first_seen, str):
+                first_seen_date = datetime.strptime(first_seen_str, '%Y-%m-%d %H:%M:%S')
+            else:
+                first_seen_date = first_seen
+                
+            days_since = (datetime.now() - first_seen_date).days
+            avg_requests = stats['total_requests'] / max(1, days_since)
+        except:
+            avg_requests = stats['total_requests']
+        
         stats_text = f"""
 📊 *Ваша статистика*
 
 👤 Пользователь: {username}
-📅 Первый визит: {stats['first_seen']}
-🕐 Последняя активность: {stats['last_active']}
+📅 Первый визит: {first_seen_str}
+🕐 Последняя активность: {last_active_str}
 📈 Всего запросов: {stats['total_requests']}
 🖼 Создано карт: {stats['total_heatmaps']}
 
 📈 *Активность:*
-- Запросов в среднем: {stats['total_requests'] / max(1, (datetime.now() - datetime.strptime(stats['first_seen'], '%Y-%m-%d %H:%M:%S')).days):.1f} в день
+- Запросов в среднем: {avg_requests:.1f} в день
         """
         
         bot.send_message(message.chat.id, stats_text, parse_mode='Markdown')
@@ -649,7 +719,6 @@ def handle_other_messages(message):
 def cleanup_old_data():
     """Очистка старых данных (запускается при старте)"""
     try:
-        from datetime import timedelta
         deleted = db_manager.cleanup_old_sessions(days=30)
         logger.info(f"Очищено {deleted} старых записей")
     except Exception as e:
