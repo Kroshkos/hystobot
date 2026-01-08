@@ -1,0 +1,30 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  telegram-bot:
+    build: .
+    container_name: heatmap-bot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - ADMIN_IDS=${ADMIN_IDS:-}
+      - TZ=Europe/Moscow
+    volumes:
+      - bot-data:/data
+      - ./logs:/app/logs
+    networks:
+      - bot-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; conn = sqlite3.connect('/data/bot_database.db'); conn.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  bot-data:
+    driver: local
+
+networks:
+  bot-network:
+    driver: bridge
