@@ -721,9 +721,13 @@ def create_heatmap(chat_id):
             del user_data[chat_id]
 
 @bot.message_handler(func=lambda message: True)
-@bot.message_handler(func=lambda message: True)
 def handle_other_messages(message):
     """Обработка всех остальных сообщений"""
+    # Проверяем, является ли сообщение командой
+    if message.text and message.text.startswith('/'):
+        # Это команда, пусть её обработают другие обработчики
+        return
+    
     # Проверяем, не находится ли пользователь в админ-состоянии
     if message.chat.id in admin_states:
         state = admin_states[message.chat.id].get('state')
@@ -751,7 +755,7 @@ def handle_other_messages(message):
     else:
         # Если не в процессе, предлагаем начать
         if is_admin(message.from_user.id):
-            bot.send_message(message.chat.id, "Используйте /start для работы с ботом")
+            bot.send_message(message.chat.id, "Используйте /start для работы с ботом или /admin для админ-панели")
         else:
             bot.send_message(message.chat.id, "Используйте /start чтобы начать работу с ботом")
     
