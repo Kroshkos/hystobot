@@ -1,5 +1,3 @@
-# main.py
-
 import telebot
 import pandas as pd
 import numpy as np
@@ -41,9 +39,14 @@ LOG_PATH = os.path.join(DATA_DIR, 'bot.log')
 # Создаем директорию для данных, если её нет
 os.makedirs(DATA_DIR, exist_ok=True)
 
+
 # Глобальные переменные
 TITLE, X_LABEL, Y_LABEL, SHOW_VALUES = range(4)
-ADMIN_MENU, ADMIN_BROADCAST, ADMIN_BROADCAST_CONFIRM, ADMIN_USER_MESSAGE, ADMIN_USER_MESSAGE_CONFIRM = range(4, 9)
+ADMIN_MENU = 4
+ADMIN_BROADCAST = 5
+ADMIN_BROADCAST_CONFIRM = 6
+ADMIN_USER_MESSAGE = 7
+ADMIN_USER_MESSAGE_CONFIRM = 8
 user_data = {}
 admin_states = {}  # Отдельный словарь для состояний админов
 
