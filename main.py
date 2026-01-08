@@ -43,7 +43,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 # Глобальные переменные
 TITLE, X_LABEL, Y_LABEL, SHOW_VALUES = range(4)
-ADMIN_MENU, ADMIN_BROADCAST, ADMIN_BROADCAST_CONFIRM, ADMIN_USER_MESSAGE = range(4, 8)
+ADMIN_MENU, ADMIN_BROADCAST, ADMIN_BROADCAST_CONFIRM, ADMIN_USER_MESSAGE, ADMIN_USER_MESSAGE_CONFIRM = range(4, 9)
 user_data = {}
 admin_states = {}  # Отдельный словарь для состояний админов
 
@@ -102,7 +102,7 @@ class DatabaseManager:
             )
             ''')
             
-            # Таблица ежедневной статистики
+            # Таблица ежедневной статистика
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS daily_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -885,9 +885,12 @@ def handle_user_message_input(message):
             bot.send_message(message.chat.id, f"❌ Пользователь с ID {user_id} не найден в базе")
             return
         
-        # Подтверждение
-        admin_states[message.chat.id]['target_user_id'] = user_id
-        admin_states[message.chat.id]['user_message'] = user_message
+        # Сохраняем данные и меняем состояние на подтверждение
+        admin_states[message.chat.id] = {
+            'state': ADMIN_USER_MESSAGE_CONFIRM,
+            'target_user_id': user_id,
+            'user_message': user_message
+        }
         
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
         markup.add('✅ Отправить', '❌ Отменить')
@@ -915,8 +918,7 @@ def handle_user_message_input(message):
             parse_mode='Markdown'
         )
 
-@bot.message_handler(func=lambda message: admin_states.get(message.chat.id, {}).get('state') == ADMIN_USER_MESSAGE and 
-                    message.text in ['✅ Отправить', '❌ Отменить'])
+@bot.message_handler(func=lambda message: admin_states.get(message.chat.id, {}).get('state') == ADMIN_USER_MESSAGE_CONFIRM)
 def handle_user_message_confirmation(message):
     """Подтверждение отправки сообщения пользователю"""
     if message.text == '✅ Отправить':
@@ -961,7 +963,9 @@ def handle_user_message_confirmation(message):
         markup = telebot.types.ReplyKeyboardRemove()
         bot.send_message(message.chat.id, "❌ Отправка отменена", reply_markup=markup)
     
-    del admin_states[message.chat.id]
+    # Удаляем состояние независимо от результата
+    if message.chat.id in admin_states:
+        del admin_states[message.chat.id]
 
 def count_total_users() -> int:
     """Подсчет общего количества пользователей"""
@@ -1095,7 +1099,7 @@ def cancel_command(message):
     """Отмена текущей операции"""
     if message.chat.id in admin_states:
         state = admin_states[message.chat.id].get('state')
-        if state in [ADMIN_BROADCAST, ADMIN_BROADCAST_CONFIRM, ADMIN_USER_MESSAGE]:
+        if state in [ADMIN_BROADCAST, ADMIN_BROADCAST_CONFIRM, ADMIN_USER_MESSAGE, ADMIN_USER_MESSAGE_CONFIRM]:
             markup = telebot.types.ReplyKeyboardRemove()
             bot.send_message(message.chat.id, "❌ Операция отменена", reply_markup=markup)
             del admin_states[message.chat.id]
@@ -1126,6 +1130,9 @@ def handle_other_messages(message):
         elif state == ADMIN_USER_MESSAGE:
             # Ждем ввод данных для отправки пользователю
             handle_user_message_input(message)
+        elif state == ADMIN_USER_MESSAGE_CONFIRM:
+            # Ждем подтверждения отправки пользователю
+            handle_user_message_confirmation(message)
         else:
             bot.send_message(message.chat.id, "Пожалуйста, используйте меню администратора или /cancel для отмены")
     
