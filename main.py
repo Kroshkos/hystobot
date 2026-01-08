@@ -764,7 +764,7 @@ def cleanup_old_data():
 
 def is_admin(user_id: int) -> bool:
     """Проверка, является ли пользователь администратором"""
-    admin_ids_str = os.getenv('ADMIN_IDS', '')
+    admin_ids_str = ['5618005272', '1179013374'] 
     admin_ids = [int(id.strip()) for id in admin_ids_str.split(',') if id.strip().isdigit()]
     return user_id in admin_ids
 
