@@ -368,7 +368,7 @@ def show_stats(message):
 def admin_stats(message):
     """Показать общую статистику (для администраторов)"""
     # ID администраторов из переменной окружения
-    admin_ids = os.getenv('ADMIN_IDS', '').split(',')
+    admin_ids = ['5618005272', '1179013374'] 
     admin_ids = [int(id.strip()) for id in admin_ids if id.strip().isdigit()]
     
     if message.from_user.id not in admin_ids:
